@@ -5,7 +5,7 @@
 
 1) Go to your Vercel deployment project, then Environment variables. Add `VITE_API_URL` and `VITE_RECAPTCHA_SITE_KEY`. The latter must be the site key for a Google reCAPTCHA v3 property that includes the production and preview hostnames.
 2) In the repository, go to backend->app.py. Under CORS, replace the url in the origins with the url of your host domain. Only this URL will be allowed to access the service. PS: if you go to inspect -> console on the website, you'll see a error message with CORS on it if it's setup incorrectly. Make sure there are no trailing backslashes. In future, maybe this can also be turned into an environment variable.
-3) In Cloud Run, configure `RECAPTCHA_SECRET_KEY`, `RECAPTCHA_ALLOWED_HOSTNAMES` (comma-separated), and optionally `RECAPTCHA_MIN_SCORE` (defaults to `0.5`). The secret key must never be exposed through a `VITE_` variable. Apply the SQL files in `backend/migrations` in numeric order before deploying this version.
+3) In Cloud Run, configure `RECAPTCHA_SECRET_KEY`, `RECAPTCHA_ALLOWED_HOSTNAMES` (comma-separated), and optionally `RECAPTCHA_MIN_SCORE` (defaults to `0.5`). The secret key must never be exposed through a `VITE_` variable. Configure `MEDIA_STORAGE_BACKEND=gcs`, `GCS_UPLOAD_BUCKET`, and optionally `GCS_PUBLIC_BASE_URL`; grant the Cloud Run service account object create/delete access and configure the bucket or public base URL for public reads. Apply the SQL files in `backend/migrations` in numeric order before deploying this version.
 
 **Note 1: The service on Google run is linked with my repository. Hence any changes to the backend should be notified to me. Only when I sync this fork will the backend get updated**
 
@@ -63,6 +63,7 @@ EMAIL_SENDER="mysterymaninyourarea@gmail.com"
 EMAIL_PASSWORD="<ASK_SIDDHANT_FOR_APP_PASSWORD>"
 JWT_SECRET="<ASK_SIDDHANT/DIVYESH>"
 JWT_ACCESS_TOKEN_HOURS="12"
+MEDIA_STORAGE_BACKEND="local"
 Step 3: Setup the React Frontend
 Open a new terminal tab in the react-app folder:
 

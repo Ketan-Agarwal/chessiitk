@@ -10,8 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=appuser:appgroup backend/ .
 
-# Ensure static upload directory exists and is owned by appuser
-RUN mkdir -p /app/static/uploads && chown -R appuser:appgroup /app
+RUN chown -R appuser:appgroup /app
 
 USER appuser
 

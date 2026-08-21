@@ -7,7 +7,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from config.db import get_db_connection
 from security_controls import consume_rate_limit, token_matches_current_user, verify_recaptcha
-from werkzeug.utils import secure_filename
+from media_storage import InvalidImageError, MediaConfigurationError, delete_uploaded_image, save_uploaded_image
 import bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
 import time
@@ -62,38 +62,6 @@ def revoked_or_stale_token(_jwt_header, jwt_payload):
 
 # Limit maximum upload size to 16MB to prevent memory exhaustion / DoS
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-
-# --- LOCAL UPLOAD DIRECTORY SETUP ---
-UPLOAD_FOLDER = os.path.join(os.getcwd(), 'static', 'uploads')
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic'}
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def safe_resolve_upload_path(relative_or_abs_path):
-    """
-    Ensures the target file path resides strictly inside the UPLOAD_FOLDER,
-    preventing path traversal and arbitrary file deletion/write vulnerabilities.
-    """
-    if not relative_or_abs_path:
-        return None
-    clean_path = relative_or_abs_path.strip().lstrip('/')
-    if clean_path.startswith('static/uploads/'):
-        clean_path = clean_path[len('static/uploads/'):]
-    elif clean_path.startswith('static/'):
-        clean_path = clean_path[len('static/'):]
-    
-    upload_dir_abs = os.path.abspath(app.config['UPLOAD_FOLDER'])
-    target_abs = os.path.abspath(os.path.join(upload_dir_abs, clean_path))
-    
-    if os.path.commonpath([upload_dir_abs, target_abs]) == upload_dir_abs and target_abs != upload_dir_abs:
-        return target_abs
-    return None
-
-# Automatically create the folder if it doesn't exist yet
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Allow your local React app and production site to connect
 CORS(
@@ -260,6 +228,7 @@ def token_required(f):
 @token_required
 def upload_carousel_image():
     conn = None
+    db_path = None
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image provided"}), 400
@@ -269,22 +238,7 @@ def upload_carousel_image():
         if file.filename == '':
             return jsonify({"error": "No selected file"}), 400
 
-        if not allowed_file(file.filename):
-            return jsonify({"error": "Invalid file type. Allowed formats: PNG, JPG, JPEG, WEBP, GIF, HEIC."}), 400
-
-        import uuid
-        filename = secure_filename(file.filename)
-        ext = os.path.splitext(filename)[1].lower()
-        unique_filename = f"{uuid.uuid4().hex}{ext}"
-        
-        # --- LOCAL FILE UPLOAD WITH SAFE PATH RESOLUTION ---
-        file_path = safe_resolve_upload_path(unique_filename)
-        if not file_path:
-            return jsonify({"error": "Invalid target upload path."}), 400
-
-        file.save(file_path)
-
-        db_path = f"/static/uploads/{unique_filename}"
+        db_path = save_uploaded_image(file)
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -299,7 +253,17 @@ def upload_carousel_image():
             "image_url": db_path
         }), 200
         
+    except InvalidImageError as e:
+        return jsonify({"error": str(e)}), 400
+    except MediaConfigurationError as e:
+        print(f"MEDIA CONFIGURATION ERROR: {e}")
+        return jsonify({"error": "Media storage is not configured."}), 503
     except Exception as e:
+        if db_path:
+            try:
+                delete_uploaded_image(db_path)
+            except Exception:
+                pass
         print(f"UPLOAD CAROUSEL ERROR: {e}")
         return jsonify({"error": "Failed to upload carousel image."}), 500
     finally:
@@ -319,27 +283,18 @@ def upload_general_file():
         if file.filename == '':
             return jsonify({"error": "No selected file"}), 400
 
-        if not allowed_file(file.filename):
-            return jsonify({"error": "Invalid file type. Allowed formats: PNG, JPG, JPEG, WEBP, GIF, HEIC."}), 400
-
-        import uuid
-        filename = secure_filename(file.filename)
-        ext = os.path.splitext(filename)[1].lower()
-        unique_filename = f"{uuid.uuid4().hex}{ext}"
-        
-        file_path = safe_resolve_upload_path(unique_filename)
-        if not file_path:
-            return jsonify({"error": "Invalid target upload path."}), 400
-
-        file.save(file_path)
-
-        db_path = f"/static/uploads/{unique_filename}"
+        db_path = save_uploaded_image(file)
         
         return jsonify({
             "message": "Image uploaded successfully!", 
             "image_url": db_path
         }), 200
         
+    except InvalidImageError as e:
+        return jsonify({"error": str(e)}), 400
+    except MediaConfigurationError as e:
+        print(f"MEDIA CONFIGURATION ERROR: {e}")
+        return jsonify({"error": "Media storage is not configured."}), 503
     except Exception as e:
         print(f"UPLOAD GENERAL FILE ERROR: {e}")
         return jsonify({"error": "Failed to upload file."}), 500
@@ -379,21 +334,18 @@ def delete_carousel_image(image_id):
         cursor.execute("SELECT image_url FROM featured_carousel WHERE id = %s", (image_id,))
         row = cursor.fetchone()
         
-        if row:
-            image_url = row[0] # e.g., "/static/uploads/Cat.jpeg"
-            
-            # --- SAFE LOCAL FILE DELETION ---
-            file_path_to_delete = safe_resolve_upload_path(image_url)
-            if file_path_to_delete and os.path.isfile(file_path_to_delete):
-                try:
-                    os.remove(file_path_to_delete)
-                except Exception as del_err:
-                    print(f"Error removing physical file: {del_err}")
+        image_url = row[0] if row else None
         
         # 2. Delete the record from the database
         cursor.execute("DELETE FROM featured_carousel WHERE id = %s", (image_id,))
         conn.commit()
         cursor.close()
+
+        if image_url:
+            try:
+                delete_uploaded_image(image_url)
+            except Exception as del_err:
+                print(f"Error removing stored media: {del_err}")
         
         return jsonify({"message": "Image deleted successfully!"}), 200
     except Exception as e:
@@ -435,14 +387,6 @@ def delete_memory():
         if not image_url_to_delete:
             return jsonify({"error": "No image URL provided"}), 400
 
-        # --- SAFE LOCAL FILE DELETION WITH PATH BOUNDARY VERIFICATION ---
-        file_path_to_delete = safe_resolve_upload_path(image_url_to_delete)
-        if file_path_to_delete and os.path.isfile(file_path_to_delete):
-            try:
-                os.remove(file_path_to_delete)
-            except Exception as e:
-                print(f"Error deleting physical file: {e}")
-
         # Delete from Database
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -450,6 +394,11 @@ def delete_memory():
         cursor.execute("DELETE FROM gallery WHERE image_url = %s", (image_url_to_delete,))
         conn.commit()
         cursor.close()
+
+        try:
+            delete_uploaded_image(image_url_to_delete)
+        except Exception as e:
+            print(f"Error deleting stored media: {e}")
 
         return jsonify({"message": "Photo deleted successfully"}), 200
     except Exception as e:
@@ -464,6 +413,7 @@ def delete_memory():
 @token_required 
 def replace_memory():
     conn = None
+    new_image_url = None
     try:
         if 'new_image' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
@@ -474,22 +424,7 @@ def replace_memory():
         if file.filename == '':
             return jsonify({"error": "No file selected"}), 400
 
-        if not allowed_file(file.filename):
-            return jsonify({"error": "Invalid file type. Allowed formats: PNG, JPG, JPEG, WEBP, GIF, HEIC."}), 400
-
-        # --- LOCAL FILE UPLOAD & SAFE DELETE ---
-        import uuid
-        filename = secure_filename(file.filename)
-        ext = os.path.splitext(filename)[1].lower()
-        unique_filename = f"{uuid.uuid4().hex}{ext}"
-
-        file_path = safe_resolve_upload_path(unique_filename)
-        if not file_path:
-            return jsonify({"error": "Invalid target upload path."}), 400
-
-        file.save(file_path)
-
-        new_image_url = f"/static/uploads/{unique_filename}"
+        new_image_url = save_uploaded_image(file)
 
         # 2. Update Database with the new local path
         conn = get_db_connection()
@@ -499,20 +434,32 @@ def replace_memory():
             "UPDATE gallery SET image_url = %s WHERE image_url = %s", 
             (new_image_url, old_image_url)
         )
+        if cursor.rowcount == 0:
+            conn.rollback()
+            delete_uploaded_image(new_image_url)
+            return jsonify({"error": "Photo not found."}), 404
         conn.commit()
         cursor.close()
 
         # 3. Delete the old physical file safely
         try:
             if old_image_url:
-                old_file_path = safe_resolve_upload_path(old_image_url)
-                if old_file_path and os.path.isfile(old_file_path):
-                    os.remove(old_file_path)
+                delete_uploaded_image(old_image_url)
         except Exception as e:
-            print(f"Error deleting old physical file: {e}")
+            print(f"Error deleting old stored media: {e}")
 
         return jsonify({"message": "Photo replaced", "new_image_url": new_image_url}), 200
+    except InvalidImageError as e:
+        return jsonify({"error": str(e)}), 400
+    except MediaConfigurationError as e:
+        print(f"MEDIA CONFIGURATION ERROR: {e}")
+        return jsonify({"error": "Media storage is not configured."}), 503
     except Exception as e:
+        if new_image_url:
+            try:
+                delete_uploaded_image(new_image_url)
+            except Exception:
+                pass
         print(f"REPLACE MEMORY ERROR: {e}")
         return jsonify({"error": "Failed to replace photo."}), 500
     finally:
