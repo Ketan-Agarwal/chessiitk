@@ -107,6 +107,20 @@ def generate_otp():
     if captcha_failure:
         return captcha_failure
 
+    rate_connection = None
+    try:
+        rate_connection = get_db_connection()
+        with rate_connection.cursor() as cursor:
+            client_address = get_client_address(request)
+            recipient_allowed = consume_rate_limit(cursor, "signup-secondary", secondary_email, 3, 3600)
+            ip_allowed = consume_rate_limit(cursor, "signup-ip", client_address, 10, 3600)
+            rate_connection.commit()
+            if not recipient_allowed or not ip_allowed:
+                return jsonify({"error": "Too many verification requests. Please try again later."}), 429
+    finally:
+        if rate_connection:
+            rate_connection.close()
+
     # 1. Validate Chess.com Username existence BEFORE sending OTP
     headers = {"User-Agent": "ChessClubIITK-Signup-App/1.0 (Contact: chessclub@iitk.ac.in)"}
     chess_api_url = f"https://api.chess.com/pub/player/{chess_username.lower()}"
@@ -127,13 +141,6 @@ def generate_otp():
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            client_address = get_client_address(request)
-            recipient_allowed = consume_rate_limit(cursor, "signup-secondary", secondary_email, 3, 3600)
-            ip_allowed = consume_rate_limit(cursor, "signup-ip", client_address, 10, 3600)
-            connection.commit()
-            if not recipient_allowed or not ip_allowed:
-                return jsonify({"error": "Too many verification requests. Please try again later."}), 429
-
             cursor.execute(
                 "SELECT 1 FROM pending_otps WHERE email = %s AND created_at >= NOW() - INTERVAL '60 seconds'",
                 (primary_email,)
