@@ -613,48 +613,61 @@ def delete_user_account():
 
 # --- LEAGUE OF LEGENDS 6.0 EVENT REGISTRATION ---
 
+def get_lol_event(cursor):
+    cursor.execute(
+        """
+        SELECT id, event_date, event_end_date
+        FROM events
+        WHERE title ILIKE '%league of legends%'
+        ORDER BY
+            CASE WHEN COALESCE(event_end_date, event_date) >= CURRENT_DATE THEN 0 ELSE 1 END,
+            CASE WHEN COALESCE(event_end_date, event_date) >= CURRENT_DATE THEN event_date END ASC,
+            event_date DESC
+        LIMIT 1
+        """
+    )
+    return cursor.fetchone()
+
 @auth_bp.route('/register-lol', methods=['POST'])
 @jwt_required()
 def register_lol():
-    data = request.get_json(silent=True) or {}
-    email = (data.get('email') or '').strip()
-    name = (data.get('name') or '').strip()
-    roll_no = (data.get('roll_no') or data.get('rollNo') or '').strip()
-    chess_username = (data.get('chess_username') or '').strip()
-    contact = (data.get('contact') or '').strip()
-    secondary_email = (data.get('secondary_email') or '').strip()
-
-    if not all([email, name, roll_no, chess_username, contact]):
-        return jsonify({"error": "All fields are required."}), 400
-
-    current_user_email = get_jwt_identity() or ''
-    if current_user_email.lower() != email.lower():
-        return jsonify({"error": "Unauthorized registration identity mismatch."}), 403
+    email = (get_jwt_identity() or '').strip()
 
     connection = None
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            # 1. Prevent registration if the event date has already passed
-            cursor.execute("SELECT event_date, event_end_date FROM events WHERE title ILIKE '%league of legends%' ORDER BY event_date DESC LIMIT 1;")
-            row = cursor.fetchone()
-            if row:
-                from datetime import date
-                event_date = row[0]
-                event_end_date = row[1]
-                compare_date = event_end_date if event_end_date else event_date
-                if compare_date and compare_date < date.today():
-                    return jsonify({"error": "Registration is closed. This event has already ended."}), 400
+            event = get_lol_event(cursor)
+            if not event:
+                return jsonify({"error": "League of Legends event is not configured."}), 404
+
+            from datetime import date
+            if (event[2] or event[1]) < date.today():
+                return jsonify({"error": "Registration is closed. This event has already ended."}), 400
+
+            cursor.execute(
+                """
+                SELECT email, name, roll_no, chess_username, contact, secondary_email
+                FROM users WHERE LOWER(email) = LOWER(%s)
+                """,
+                (email,),
+            )
+            profile = cursor.fetchone()
+            if not profile or not all(profile[:5]):
+                return jsonify({"error": "Complete your profile before registering."}), 400
 
             # Check if user is already registered
-            cursor.execute('SELECT id FROM "lolEntries" WHERE LOWER(email) = LOWER(%s)', (email,))
+            cursor.execute(
+                'SELECT id FROM "lolEntries" WHERE event_id = %s AND LOWER(email) = LOWER(%s)',
+                (event[0], email),
+            )
             if cursor.fetchone():
                 return jsonify({"error": "You are already registered for this event."}), 409
 
             # Insert registration record
             cursor.execute(
-                'INSERT INTO "lolEntries" (email, name, roll_no, chess_username, contact, secondary_email) VALUES (%s, %s, %s, %s, %s, %s)',
-                (email, name, roll_no, chess_username, contact, secondary_email or '')
+                'INSERT INTO "lolEntries" (event_id, email, name, roll_no, chess_username, contact, secondary_email) VALUES (%s, %s, %s, %s, %s, %s, %s)',
+                (event[0], profile[0], profile[1], profile[2], profile[3], profile[4], profile[5] or '')
             )
             connection.commit()
             return jsonify({"message": "Successfully registered for League of Legends 6.0!"}), 201
@@ -674,7 +687,13 @@ def register_lol_status():
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            cursor.execute('SELECT id FROM "lolEntries" WHERE LOWER(email) = LOWER(%s)', (email,))
+            event = get_lol_event(cursor)
+            if not event:
+                return jsonify({"is_registered": False}), 200
+            cursor.execute(
+                'SELECT id FROM "lolEntries" WHERE event_id = %s AND LOWER(email) = LOWER(%s)',
+                (event[0], email),
+            )
             is_registered = cursor.fetchone() is not None
             return jsonify({"is_registered": is_registered}), 200
     except Exception as e:

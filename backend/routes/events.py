@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import get_jwt, jwt_required
+from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from config.db import get_db_connection
 from urllib.parse import urlparse
 
@@ -93,6 +93,67 @@ def get_events():
     except Exception as e:
         print(f"Error fetching events: {e}")
         return jsonify({"error": "Failed to fetch events"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@events_bp.route('/api/events/<int:event_id>/registrations', methods=['POST'])
+@jwt_required()
+def register_for_event(event_id):
+    data = request.get_json(silent=True) or {}
+    remarks = (data.get('remarks') or '').strip()
+    if len(remarks) > 2000:
+        return jsonify({"error": "Remarks must be at most 2000 characters."}), 400
+
+    email = (get_jwt_identity() or '').strip()
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, event_date, event_end_date FROM events WHERE id = %s FOR UPDATE",
+                (event_id,),
+            )
+            event = cur.fetchone()
+            if not event:
+                return jsonify({"error": "Event not found."}), 404
+
+            from datetime import date
+            closing_date = event[2] or event[1]
+            if closing_date and closing_date < date.today():
+                return jsonify({"error": "Registration is closed because this event has ended."}), 400
+
+            cur.execute(
+                """
+                SELECT id, email, name, roll_no, contact
+                FROM users WHERE LOWER(email) = LOWER(%s)
+                """,
+                (email,),
+            )
+            user = cur.fetchone()
+            if not user or not all(user[1:5]):
+                return jsonify({"error": "Complete your profile before registering."}), 400
+
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO event_registrations
+                        (event_id, user_id, email, name, roll_no, contact, remarks)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (event_id, user[0], user[1], user[2], user[3], user[4], remarks),
+                )
+            except Exception as error:
+                if getattr(error, 'sqlstate', None) == '23505':
+                    return jsonify({"error": "You are already registered for this event."}), 409
+                raise
+
+            conn.commit()
+            return jsonify({"message": "Event registration confirmed."}), 201
+    except Exception as error:
+        print(f"Event registration error: {error}")
+        return jsonify({"error": "Could not register for this event."}), 500
     finally:
         if conn:
             conn.close()

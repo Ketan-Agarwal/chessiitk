@@ -9,6 +9,8 @@ DROP TABLE IF EXISTS featured_carousel CASCADE;
 DROP TABLE IF EXISTS gallery CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS security_rate_limits CASCADE;
+DROP TABLE IF EXISTS event_registrations CASCADE;
+DROP TABLE IF EXISTS "lolEntries" CASCADE;
 
 -- 1. Users Table
 CREATE TABLE users (
@@ -66,7 +68,34 @@ CREATE TABLE events (
     location varchar(255) DEFAULT NULL,
     format varchar(255) DEFAULT NULL,
     register_link varchar(500) DEFAULT NULL,
+    event_end_date date DEFAULT NULL,
     created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE event_registrations (
+    id BIGSERIAL PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    roll_no VARCHAR(50) NOT NULL,
+    contact VARCHAR(20) NOT NULL,
+    remarks VARCHAR(2000) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (event_id, user_id)
+);
+
+CREATE TABLE "lolEntries" (
+    id SERIAL PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    roll_no VARCHAR(50) NOT NULL,
+    chess_username VARCHAR(100) NOT NULL,
+    contact VARCHAR(20) NOT NULL,
+    secondary_email VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (event_id, email)
 );
 
 -- 6. Gallery Table
@@ -117,3 +146,5 @@ ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gallery ENABLE ROW LEVEL SECURITY;
 ALTER TABLE blogs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_rate_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_registrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "lolEntries" ENABLE ROW LEVEL SECURITY;

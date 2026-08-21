@@ -1,0 +1,36 @@
+CREATE TABLE IF NOT EXISTS event_registrations (
+    id BIGSERIAL PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    roll_no VARCHAR(50) NOT NULL,
+    contact VARCHAR(20) NOT NULL,
+    remarks VARCHAR(2000) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (event_id, user_id)
+);
+
+ALTER TABLE event_registrations ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS "lolEntries" (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    roll_no VARCHAR(50) NOT NULL,
+    chess_username VARCHAR(100) NOT NULL,
+    contact VARCHAR(20) NOT NULL,
+    secondary_email VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE "lolEntries"
+    ADD COLUMN IF NOT EXISTS event_id INTEGER REFERENCES events(id) ON DELETE CASCADE;
+
+ALTER TABLE "lolEntries" DROP CONSTRAINT IF EXISTS "lolEntries_email_key";
+
+CREATE UNIQUE INDEX IF NOT EXISTS lol_entries_event_email_unique
+    ON "lolEntries" (event_id, LOWER(email))
+    WHERE event_id IS NOT NULL;
+
+ALTER TABLE "lolEntries" ENABLE ROW LEVEL SECURITY;

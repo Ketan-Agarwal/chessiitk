@@ -11,6 +11,7 @@ const EventRegistration = () => {
   const [formData, setFormData] = useState({ name: '', rollNo: '', phone: '', email: '', remarks: '' });
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
     let found = OFFICIAL_EVENTS.find(e => String(e.id) === String(id));
@@ -51,26 +52,58 @@ const EventRegistration = () => {
     fetchEvent();
   }, [id]);
 
-  const handleSubmit = (e) => {
+  useEffect(() => {
+    const email = localStorage.getItem('logged_in_user_email');
+    const token = localStorage.getItem('chess-club-jwt');
+    if (!email || !token) return;
+
+    fetch(`${API_BASE_URL}/api/user/profile/${encodeURIComponent(email)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Profile unavailable')))
+      .then((profile) => setFormData((current) => ({
+        ...current,
+        name: profile.name || '',
+        rollNo: profile.rollNo || '',
+        phone: profile.contact || '',
+        email: profile.email || email
+      })))
+      .catch(() => setSubmitError('Unable to load your verified profile. Please refresh or update your profile.'));
+  }, []);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setSubmitError('');
 
-    const savedParticipations = JSON.parse(localStorage.getItem('chess-club-participations') || '[]');
-    if (!savedParticipations.find(p => p.eventId === event.id)) {
-      const newParticipation = {
-        id: `rsvp_${Date.now()}`,
-        eventId: event.id,
-        title: event.title,
-        date: event.date,
-        time: event.time,
-        tag: event.tag,
-        registeredAt: new Date().toISOString()
-      };
-      savedParticipations.push(newParticipation);
-      localStorage.setItem('chess-club-participations', JSON.stringify(savedParticipations));
-    }
+    try {
+      const token = localStorage.getItem('chess-club-jwt');
+      const eventId = String(event.id).replace('db-', '');
+      const response = await fetch(`${API_BASE_URL}/api/events/${eventId}/registrations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ remarks: formData.remarks })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Registration failed.');
 
-    setTimeout(() => {
+      const savedParticipations = JSON.parse(localStorage.getItem('chess-club-participations') || '[]');
+      if (!savedParticipations.find(p => p.eventId === event.id)) {
+        savedParticipations.push({
+          id: `rsvp_${Date.now()}`,
+          eventId: event.id,
+          title: event.title,
+          date: event.date,
+          time: event.time,
+          tag: event.tag,
+          registeredAt: new Date().toISOString()
+        });
+        localStorage.setItem('chess-club-participations', JSON.stringify(savedParticipations));
+      }
+
       setIsSubmitting(false);
       setIsSubmitted(true);
       confetti({
@@ -79,7 +112,10 @@ const EventRegistration = () => {
         origin: { y: 0.6 },
         colors: ['#f2ca50', '#d4af37', '#ffffff', '#1c1b1b'] 
       });
-    }, 800);
+    } catch (error) {
+      setSubmitError(error.message);
+      setIsSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -148,12 +184,19 @@ const EventRegistration = () => {
           /* FORM STATE */
           <form onSubmit={handleSubmit} className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
 
+            {submitError && (
+              <div className="md:col-span-2 text-red-500 text-sm bg-red-500/10 p-3 rounded-lg">
+                {submitError}
+              </div>
+            )}
+
             <div className="space-y-4">
               <div>
                 <label className="block text-[10px] font-label uppercase tracking-widest text-on-surface-variant mb-1.5 focus-within:text-primary transition-colors">Full Name</label>
                 <input
                   type="text"
                   required
+                  readOnly
                   placeholder="e.g. Inesh Aggarwal"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -166,6 +209,7 @@ const EventRegistration = () => {
                 <input
                   type="text"
                   required
+                  readOnly
                   placeholder="e.g. 210123"
                   value={formData.rollNo}
                   onChange={(e) => setFormData({ ...formData, rollNo: e.target.value })}
@@ -178,6 +222,7 @@ const EventRegistration = () => {
                 <input
                   type="email"
                   required
+                  readOnly
                   placeholder="e.g. member@iitk.ac.in"
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
@@ -192,6 +237,7 @@ const EventRegistration = () => {
                 <input
                   type="tel"
                   required
+                  readOnly
                   placeholder="e.g. 9876543210"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
