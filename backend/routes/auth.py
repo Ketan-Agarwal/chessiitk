@@ -10,7 +10,7 @@ from psycopg.rows import dict_row
 import requests
 from config.db import get_db_connection
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from security_controls import consume_rate_limit, verify_recaptcha
+from security_controls import consume_rate_limit, get_client_address, verify_recaptcha
 
 # 1. ALWAYS initialize the Blueprint first!
 auth_bp = Blueprint('auth', __name__)
@@ -127,7 +127,7 @@ def generate_otp():
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            client_address = request.remote_addr or "unknown"
+            client_address = get_client_address(request)
             recipient_allowed = consume_rate_limit(cursor, "signup-secondary", secondary_email, 3, 3600)
             ip_allowed = consume_rate_limit(cursor, "signup-ip", client_address, 10, 3600)
             connection.commit()
@@ -298,7 +298,7 @@ def forgot_password():
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            client_address = request.remote_addr or "unknown"
+            client_address = get_client_address(request)
             recipient_allowed = consume_rate_limit(cursor, "password-reset-recipient", email, 5, 3600)
             ip_allowed = consume_rate_limit(cursor, "password-reset-ip", client_address, 10, 3600)
             connection.commit()
@@ -741,7 +741,7 @@ def handle_alumni_request():
     try:
         rate_connection = get_db_connection()
         with rate_connection.cursor() as cursor:
-            client_address = request.remote_addr or "unknown"
+            client_address = get_client_address(request)
             email_allowed = consume_rate_limit(cursor, "alumni-request-email", email, 3, 86400)
             ip_allowed = consume_rate_limit(cursor, "alumni-request-ip", client_address, 5, 3600)
             rate_connection.commit()

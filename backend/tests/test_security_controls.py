@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from security_controls import rate_limit_key, token_matches_current_user, verify_recaptcha
+from security_controls import get_client_address, rate_limit_key, token_matches_current_user, verify_recaptcha
 
 
 class RecaptchaTests(unittest.TestCase):
@@ -92,6 +92,21 @@ class TokenFreshnessTests(unittest.TestCase):
         payload = {"token_version": 2, "role": "member", "is_admin": False}
         self.assertTrue(token_matches_current_user(payload, 2, False))
         self.assertFalse(token_matches_current_user(payload, 3, False))
+
+
+class ClientAddressTests(unittest.TestCase):
+    def test_does_not_trust_forwarded_header_outside_managed_proxy(self):
+        request = Mock(remote_addr="192.0.2.1", headers={"X-Forwarded-For": "198.51.100.7"})
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(get_client_address(request), "192.0.2.1")
+
+    def test_uses_cloud_run_client_address(self):
+        request = Mock(
+            remote_addr="169.254.1.1",
+            headers={"X-Forwarded-For": "198.51.100.7, 169.254.1.1"},
+        )
+        with patch.dict(os.environ, {"K_SERVICE": "chess-api"}, clear=True):
+            self.assertEqual(get_client_address(request), "198.51.100.7")
 
 
 if __name__ == "__main__":

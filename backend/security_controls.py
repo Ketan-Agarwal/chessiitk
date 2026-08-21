@@ -1,10 +1,29 @@
 import hashlib
+import ipaddress
 import os
 
 import requests
 
 
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
+
+
+def get_client_address(flask_request):
+    """Use Cloud Run's load-balancer supplied client address, never arbitrary headers locally."""
+    trust_forwarded = os.environ.get("TRUST_FORWARDED_CLIENT_IP")
+    if trust_forwarded is None:
+        trust_forwarded = "true" if os.environ.get("K_SERVICE") else "false"
+
+    candidate = flask_request.remote_addr or ""
+    if trust_forwarded.strip().lower() == "true":
+        forwarded = flask_request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            candidate = forwarded.split(",", 1)[0].strip()
+
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return "unknown"
 
 
 def verify_recaptcha(token, expected_action):

@@ -6,7 +6,7 @@ from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 from config.db import get_db_connection
-from security_controls import consume_rate_limit, token_matches_current_user, verify_recaptcha
+from security_controls import consume_rate_limit, get_client_address, token_matches_current_user, verify_recaptcha
 from media_storage import InvalidImageError, MediaConfigurationError, delete_uploaded_image, save_uploaded_image
 import bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
@@ -113,7 +113,7 @@ def login():
 
         limit = int(os.environ.get("LOGIN_RATE_LIMIT_ATTEMPTS", "10"))
         window = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "900"))
-        client_address = request.remote_addr or "unknown"
+        client_address = get_client_address(request)
         ip_allowed = consume_rate_limit(cursor, "login-ip", client_address, limit, window)
         account_allowed = consume_rate_limit(cursor, "login-account", username, limit, window)
         conn.commit()
