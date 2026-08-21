@@ -3,3 +3,14 @@
 **/__pycache__/ 
 backend/venv/
 .vscode/
+.DS_Store
+*.log
+*_data.sql
+cloud-sql-proxy
+backend/cloud-sql-proxy
+react-app/cloud-sql-proxy
+node_modules/
+react-app/dist/
+react-app/build_err.txt
+react-app/vite_err.txt
+react-app/eslint_report.*
