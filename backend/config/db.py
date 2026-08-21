@@ -23,7 +23,7 @@ def get_pool():
             min_size=1,
             max_size=10,
             open=True,
-            configure=lambda conn: setattr(conn, 'autocommit', True)
+            configure=lambda conn: setattr(conn, 'autocommit', False)
         )
     return _pool
 
@@ -41,16 +41,23 @@ class ConnectionProxy:
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
             if self._conn:
-                self._conn.__exit__(exc_type, exc_val, exc_tb)
+                if exc_type:
+                    self._conn.rollback()
+                else:
+                    self._conn.commit()
         finally:
             self.close()
 
     def close(self):
         # Return connection back to the pool instead of closing the physical connection
         if self._conn and self._pool:
-            self._pool.putconn(self._conn)
-            self._conn = None
-            self._pool = None
+            try:
+                # Never leak an open or failed transaction into the next request.
+                self._conn.rollback()
+            finally:
+                self._pool.putconn(self._conn)
+                self._conn = None
+                self._pool = None
 
 def get_db_connection():
     pool = get_pool()

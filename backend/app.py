@@ -148,6 +148,7 @@ def login():
         client_address = request.remote_addr or "unknown"
         ip_allowed = consume_rate_limit(cursor, "login-ip", client_address, limit, window)
         account_allowed = consume_rate_limit(cursor, "login-account", username, limit, window)
+        conn.commit()
         if not ip_allowed or not account_allowed:
             cursor.close()
             return jsonify({'error': 'Too many login attempts. Please try again later.'}), 429

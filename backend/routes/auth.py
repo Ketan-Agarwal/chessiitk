@@ -130,6 +130,7 @@ def generate_otp():
             client_address = request.remote_addr or "unknown"
             recipient_allowed = consume_rate_limit(cursor, "signup-secondary", secondary_email, 3, 3600)
             ip_allowed = consume_rate_limit(cursor, "signup-ip", client_address, 10, 3600)
+            connection.commit()
             if not recipient_allowed or not ip_allowed:
                 return jsonify({"error": "Too many verification requests. Please try again later."}), 429
 
@@ -244,9 +245,11 @@ def verify_and_register():
 
             # 2. Confirm OTP matches database and has not expired (valid for 15 minutes)
             if not verify_otp(cursor, email, primary_user_otp):
+                connection.commit()
                 return jsonify({"error": "Invalid or expired primary email confirmation OTP."}), 401
             
             if not verify_otp(cursor, secondary_email, secondary_user_otp):
+                connection.commit()
                 return jsonify({"error": "Invalid or expired secondary email confirmation OTP."}), 401
 
             # 3. Hash secret credentials safely
@@ -266,6 +269,8 @@ def verify_and_register():
 
     except Exception as e:
         print(f"Registration Error: {e}")
+        if getattr(e, 'sqlstate', None) == '23505':
+            return jsonify({"error": "An account with these identifiers already exists."}), 409
         return jsonify({"error": "Internal server error."}), 500
     finally:
         if connection:
@@ -296,6 +301,7 @@ def forgot_password():
             client_address = request.remote_addr or "unknown"
             recipient_allowed = consume_rate_limit(cursor, "password-reset-recipient", email, 5, 3600)
             ip_allowed = consume_rate_limit(cursor, "password-reset-ip", client_address, 10, 3600)
+            connection.commit()
             if not recipient_allowed or not ip_allowed:
                 return jsonify({"message": "If an account exists, a recovery code has been sent."}), 200
 
@@ -357,6 +363,7 @@ def reset_password():
         with connection.cursor() as cursor:
             # Confirm recovery code matches token on file and has not expired (valid for 15 minutes)
             if not verify_otp(cursor, email, user_otp):
+                connection.commit()
                 return jsonify({"error": "Invalid or expired recovery token."}), 401
 
             # Hash replacement password
@@ -532,6 +539,7 @@ def update_user_profile():
 
                 # Verify OTP (valid for 15 minutes)
                 if not verify_otp(cursor, cleaned_sec, otp):
+                    connection.commit()
                     return jsonify({"error": "Invalid or expired OTP."}), 401
                 
                 # Delete OTP
@@ -736,6 +744,7 @@ def handle_alumni_request():
             client_address = request.remote_addr or "unknown"
             email_allowed = consume_rate_limit(cursor, "alumni-request-email", email, 3, 86400)
             ip_allowed = consume_rate_limit(cursor, "alumni-request-ip", client_address, 5, 3600)
+            rate_connection.commit()
             if not email_allowed or not ip_allowed:
                 return jsonify({"error": "Too many requests. Please try again later."}), 429
     finally:
@@ -771,6 +780,11 @@ def handle_alumni_request():
                 connection.commit()
     except Exception as e:
         print(f"Database Alumni Request Error: {e}")
+        if getattr(e, 'sqlstate', None) == '23505':
+            return jsonify({
+                "success": True,
+                "message": "Your existing request is still awaiting review."
+            }), 200
         return jsonify({"error": "Failed to record alumni request in database."}), 500
     finally:
         if connection:

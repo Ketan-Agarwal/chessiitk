@@ -11,6 +11,7 @@ DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS security_rate_limits CASCADE;
 DROP TABLE IF EXISTS event_registrations CASCADE;
 DROP TABLE IF EXISTS "lolEntries" CASCADE;
+DROP TABLE IF EXISTS alumni_requests CASCADE;
 
 -- 1. Users Table
 CREATE TABLE users (
@@ -25,7 +26,8 @@ CREATE TABLE users (
     roll_no varchar(50) NOT NULL DEFAULT 'XXXXXX',
     contact varchar(20) NOT NULL DEFAULT '0000000000',
     avatar text,
-    secondary_email varchar(255) NOT NULL
+    secondary_email varchar(255) NOT NULL,
+    gender varchar(30)
 );
 
 -- 2. Pending OTPs Table
@@ -43,6 +45,27 @@ CREATE TABLE security_rate_limits (
 );
 
 CREATE INDEX security_rate_limits_window_idx ON security_rate_limits (window_started_at);
+
+CREATE TABLE alumni_requests (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    roll_no VARCHAR(50),
+    graduation_year VARCHAR(20),
+    chess_username VARCHAR(100),
+    contact VARCHAR(20),
+    notes VARCHAR(2000),
+    gender VARCHAR(30),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX users_email_lower_unique ON users (LOWER(email));
+CREATE UNIQUE INDEX users_chess_username_lower_unique ON users (LOWER(chess_username));
+CREATE UNIQUE INDEX users_secondary_email_lower_unique ON users (LOWER(secondary_email));
+CREATE UNIQUE INDEX alumni_one_pending_request_per_email
+    ON alumni_requests (LOWER(email)) WHERE status = 'pending';
 
 -- 3. Site Config Table
 CREATE TABLE site_config (
@@ -148,3 +171,4 @@ ALTER TABLE blogs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_rate_limits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE event_registrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "lolEntries" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alumni_requests ENABLE ROW LEVEL SECURITY;
