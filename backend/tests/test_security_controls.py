@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from security_controls import rate_limit_key, verify_recaptcha
+from security_controls import rate_limit_key, token_matches_current_user, verify_recaptcha
 
 
 class RecaptchaTests(unittest.TestCase):
@@ -81,6 +81,17 @@ class RecaptchaTests(unittest.TestCase):
         key = rate_limit_key("login-account", "Student25@iitk.ac.in")
         self.assertTrue(key.startswith("login-account:"))
         self.assertNotIn("student25", key)
+
+
+class TokenFreshnessTests(unittest.TestCase):
+    def test_rejects_secretary_token_after_demotion(self):
+        payload = {"token_version": 2, "role": "secretary", "is_admin": True}
+        self.assertFalse(token_matches_current_user(payload, 2, False))
+
+    def test_accepts_token_only_when_version_and_role_are_current(self):
+        payload = {"token_version": 2, "role": "member", "is_admin": False}
+        self.assertTrue(token_matches_current_user(payload, 2, False))
+        self.assertFalse(token_matches_current_user(payload, 3, False))
 
 
 if __name__ == "__main__":

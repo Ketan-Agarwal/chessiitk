@@ -1,13 +1,12 @@
 import os
 import jwt
 import datetime
-import secrets
 from functools import wraps
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 from config.db import get_db_connection
-from security_controls import consume_rate_limit, verify_recaptcha
+from security_controls import consume_rate_limit, token_matches_current_user, verify_recaptcha
 from werkzeug.utils import secure_filename
 import bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
@@ -24,12 +23,16 @@ from routes.events import events_bp
 app = Flask(__name__)
 jwt_secret = os.environ.get("JWT_SECRET")
 if not jwt_secret:
-    jwt_secret = os.environ.get("JWT_SECRET_DEV", secrets.token_hex(32))
+    jwt_secret = os.environ.get("JWT_SECRET_DEV")
+if not jwt_secret:
+    raise RuntimeError("JWT_SECRET must be configured before the backend can start.")
 
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_SECRET_KEY"] = jwt_secret
 app.config["JWT_SECRET"] = jwt_secret
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(days=30)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(
+    hours=int(os.environ.get("JWT_ACCESS_TOKEN_HOURS", "12"))
+)
 jwt_manager = JWTManager(app)
 
 
@@ -42,9 +45,12 @@ def is_current_token(payload):
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            cursor.execute("SELECT token_version FROM users WHERE LOWER(email) = LOWER(%s)", (identity,))
+            cursor.execute(
+                "SELECT token_version, is_admin FROM users WHERE LOWER(email) = LOWER(%s)",
+                (identity,),
+            )
             user = cursor.fetchone()
-            return bool(user) and user[0] == token_version
+            return bool(user) and token_matches_current_user(payload, user[0], user[1])
     finally:
         if conn:
             conn.close()

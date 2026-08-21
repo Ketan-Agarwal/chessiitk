@@ -55,6 +55,15 @@ def rate_limit_key(scope, identifier):
     return f"{scope}:{digest}"
 
 
+def token_matches_current_user(payload, token_version, is_admin):
+    current_role = "secretary" if is_admin else "member"
+    return (
+        payload.get("token_version") == token_version
+        and payload.get("role") == current_role
+        and bool(payload.get("is_admin")) == bool(is_admin)
+    )
+
+
 def consume_rate_limit(cursor, scope, identifier, limit, window_seconds):
     """Atomically consume one attempt in a database-backed fixed window."""
     cursor.execute(

@@ -62,6 +62,7 @@ DB_PASSWORD="<ASK_SIDDHANT_FOR_PASSWORD>"
 EMAIL_SENDER="mysterymaninyourarea@gmail.com"
 EMAIL_PASSWORD="<ASK_SIDDHANT_FOR_APP_PASSWORD>"
 JWT_SECRET="<ASK_SIDDHANT/DIVYESH>"
+JWT_ACCESS_TOKEN_HOURS="12"
 Step 3: Setup the React Frontend
 Open a new terminal tab in the react-app folder:
 
