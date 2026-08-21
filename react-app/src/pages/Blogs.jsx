@@ -288,7 +288,10 @@ const Blogs = () => {
       const method = editingPostId ? 'PUT' : 'POST';
       const response = await fetch(url, {
         method: method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({
           author_email: effectiveEmail,
           title: newTitle,
@@ -317,7 +320,10 @@ const Blogs = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/blogs/${deleteTargetId}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({ email: effectiveEmail })
       });
       if (!response.ok) throw new Error("Unauthorized operational delete block");
