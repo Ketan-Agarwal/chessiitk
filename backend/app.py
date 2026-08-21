@@ -1,18 +1,17 @@
 import os
 import jwt
 import datetime
+import secrets
 from functools import wraps
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 from config.db import get_db_connection
-from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
 import bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
-import bcrypt 
-import time #test
-from flask import request, g #test
+import time
+
 # Load your local .env file BEFORE anything else
 load_dotenv()
 
@@ -22,16 +21,69 @@ from routes.blogs import blogs_bp
 from routes.events import events_bp
 
 app = Flask(__name__)
+jwt_secret = os.environ.get("JWT_SECRET")
+if not jwt_secret:
+    jwt_secret = os.environ.get("JWT_SECRET_DEV", secrets.token_hex(32))
+
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]
-app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET")
-app.config["JWT_SECRET"] = os.environ.get("JWT_SECRET")
+app.config["JWT_SECRET_KEY"] = jwt_secret
+app.config["JWT_SECRET"] = jwt_secret
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(days=30)
 jwt_manager = JWTManager(app)
 
+
+def is_current_token(payload):
+    identity = (payload.get('sub') or '').strip()
+    token_version = payload.get('token_version')
+    if not identity or token_version is None:
+        return False
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT token_version FROM users WHERE LOWER(email) = LOWER(%s)", (identity,))
+            user = cursor.fetchone()
+            return bool(user) and user[0] == token_version
+    finally:
+        if conn:
+            conn.close()
+
+
+@jwt_manager.token_in_blocklist_loader
+def revoked_or_stale_token(_jwt_header, jwt_payload):
+    return not is_current_token(jwt_payload)
+
+# Limit maximum upload size to 16MB to prevent memory exhaustion / DoS
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+
 # --- LOCAL UPLOAD DIRECTORY SETUP ---
-# Defines the path: backend/static/uploads
 UPLOAD_FOLDER = os.path.join(os.getcwd(), 'static', 'uploads')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'heic'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def safe_resolve_upload_path(relative_or_abs_path):
+    """
+    Ensures the target file path resides strictly inside the UPLOAD_FOLDER,
+    preventing path traversal and arbitrary file deletion/write vulnerabilities.
+    """
+    if not relative_or_abs_path:
+        return None
+    clean_path = relative_or_abs_path.strip().lstrip('/')
+    if clean_path.startswith('static/uploads/'):
+        clean_path = clean_path[len('static/uploads/'):]
+    elif clean_path.startswith('static/'):
+        clean_path = clean_path[len('static/'):]
+    
+    upload_dir_abs = os.path.abspath(app.config['UPLOAD_FOLDER'])
+    target_abs = os.path.abspath(os.path.join(upload_dir_abs, clean_path))
+    
+    if os.path.commonpath([upload_dir_abs, target_abs]) == upload_dir_abs and target_abs != upload_dir_abs:
+        return target_abs
+    return None
 
 # Automatically create the folder if it doesn't exist yet
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -50,8 +102,6 @@ app.register_blueprint(auth_bp, url_prefix='/api')
 app.register_blueprint(blogs_bp, url_prefix='/api')
 app.register_blueprint(events_bp)
 
-# <--- MUST BE AT THE TOP OF app.py
-#test, comment out before deploying or pushing into master repo
 @app.before_request
 def before_request():
     # Record the high-precision start time when the request hits the server
@@ -62,46 +112,43 @@ def after_request(response):
     # Calculate how long the request took if start_time exists
     if hasattr(g, 'start_time'):
         elapsed_ms = (time.perf_counter() - g.start_time) * 1000
-        
-        # Log the route and exact execution time to your terminal
-        # print(f"⏱️ [PERF MONITOR] {request.method} {request.path} took {elapsed_ms:.2f} ms (Status: {response.status_code})")
-        
-        # Optional: Send it back in the browser's response headers so you can see it in Chrome DevTools
         response.headers['X-Response-Time'] = f"{elapsed_ms:.2f}ms"
+    
+    # Standard Security Headers
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
         
     return response
-#testcloses
+
 @app.route('/api/login', methods=['POST'])
 def login():
+    conn = None
     try:
-        data = request.json
-        username = data.get('username') # This can be their email or chess_username
-        password = data.get('password')
+        data = request.get_json(silent=True) or {}
+        username = (data.get('username') or data.get('email') or '').strip()
+        password = data.get('password') or ''
+
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required.'}), 400
         
         conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT id, is_admin, password_hash FROM users WHERE email = %s OR secondary_email = %s", 
+            "SELECT id, is_admin, password_hash, email, token_version FROM users WHERE LOWER(email) = LOWER(%s) OR LOWER(secondary_email) = LOWER(%s)", 
             (username, username)
         )
         user = cursor.fetchone()
         cursor.close()
-        conn.close()
         
-        # 1. THE FIX: Use bcrypt to check the password instead of check_password_hash
-        # user[2] contains the hashed string from the DB
-        # 2. Check if user exists and password matches the hash
+        # Check if user exists and password matches the hash
         if user and bcrypt.checkpw(password.encode('utf-8'), user[2].encode('utf-8')):
-            
-            # --- THE FIX IS HERE ---
-            # Instead of blocking non-admins, we assign them a different role!
-            # user[1] is the is_admin column from your SQL database
             user_role = 'secretary' if user[1] else 'member'
-                
-            user_email = username if '@' in username else ""
-            additional_claims = {"role": user_role, "is_admin": user[1], "user_id": user[0]}
-            token = create_access_token(identity=user_email, additional_claims=additional_claims)
+            canonical_email = user[3] if user[3] else (username if '@' in username else "")
+            additional_claims = {"role": user_role, "is_admin": bool(user[1]), "user_id": user[0], "token_version": user[4]}
+            token = create_access_token(identity=canonical_email, additional_claims=additional_claims)
             
             return jsonify({'token': token, 'role': user_role}), 200
             
@@ -109,7 +156,10 @@ def login():
         
     except Exception as e:
         print(f"CRITICAL LOGIN EXCEPTION: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @app.route("/health")
 def health():
@@ -118,13 +168,18 @@ def health():
 
 @app.route("/db-test")
 def db_test():
-    conn = get_db_connection()
-    conn.close()
-    return {"database": "connected"}
+    conn = None
+    try:
+        conn = get_db_connection()
+        return {"database": "connected"}
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route('/api/gallery', methods=['GET'])
 def get_gallery():
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor() 
@@ -138,29 +193,30 @@ def get_gallery():
         images = [dict(zip(columns, row)) for row in cursor.fetchall()]
         
         cursor.close()
-        conn.close()
-        
         return jsonify(images), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"GET GALLERY ERROR: {e}")
+        return jsonify({"error": "Failed to fetch gallery."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
         
-        # 1. Check if the frontend sent a token in the headers
-        if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].split(" ")[1]
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:].strip()
             
         if not token:
             return jsonify({'error': 'Token is missing! Access denied.'}), 401
             
         try:
             data = jwt.decode(token, app.config["JWT_SECRET_KEY"], algorithms=['HS256'])
-            
-            # Flask-JWT-Extended nests claims inside a top-level property dictionary
-            claims = data.get('sub') or data
+            if not is_current_token(data):
+                return jsonify({'error': 'Token has been revoked. Please log in again.'}), 401
             role_to_check = data.get('role')
             
             if role_to_check != 'secretary':
@@ -168,8 +224,10 @@ def token_required(f):
                 
         except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token has expired. Please log in again.'}), 401
-        except jwt.InvalidTokenError:
+        except jwt.PyJWTError:
             return jsonify({'error': 'Invalid token.'}), 401
+        except Exception:
+            return jsonify({'error': 'Authentication failed.'}), 401
             
         return f(*args, **kwargs)
     return decorated
@@ -178,6 +236,7 @@ def token_required(f):
 @app.route('/api/carousel', methods=['POST'])
 @token_required
 def upload_carousel_image():
+    conn = None
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image provided"}), 400
@@ -187,28 +246,30 @@ def upload_carousel_image():
         if file.filename == '':
             return jsonify({"error": "No selected file"}), 400
 
+        if not allowed_file(file.filename):
+            return jsonify({"error": "Invalid file type. Allowed formats: PNG, JPG, JPEG, WEBP, GIF, HEIC."}), 400
+
+        import uuid
         filename = secure_filename(file.filename)
+        ext = os.path.splitext(filename)[1].lower()
+        unique_filename = f"{uuid.uuid4().hex}{ext}"
         
-        # --- LOCAL FILE UPLOAD ---
-        # 1. Construct the physical path on your laptop/server
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        
-        # 2. Save the file directly to the static/uploads folder
+        # --- LOCAL FILE UPLOAD WITH SAFE PATH RESOLUTION ---
+        file_path = safe_resolve_upload_path(unique_filename)
+        if not file_path:
+            return jsonify({"error": "Invalid target upload path."}), 400
+
         file.save(file_path)
 
-        # 3. Create the relative URL path to save in your SQL database
-        db_path = f"/static/uploads/{filename}"
+        db_path = f"/static/uploads/{unique_filename}"
         
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO featured_carousel (image_url) VALUES (%s) RETURNING id", (db_path,))
-        # Get the ID of the newly inserted row to return to the frontend
         new_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
-        conn.close()
         
-        # Return the new image object so React can display it instantly without refreshing
         return jsonify({
             "message": "Image uploaded successfully!", 
             "id": new_id,
@@ -216,7 +277,11 @@ def upload_carousel_image():
         }), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"UPLOAD CAROUSEL ERROR: {e}")
+        return jsonify({"error": "Failed to upload carousel image."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route('/api/upload', methods=['POST'])
@@ -231,14 +296,18 @@ def upload_general_file():
         if file.filename == '':
             return jsonify({"error": "No selected file"}), 400
 
-        filename = secure_filename(file.filename)
-        
-        # Make filename unique to avoid duplicate collisions
+        if not allowed_file(file.filename):
+            return jsonify({"error": "Invalid file type. Allowed formats: PNG, JPG, JPEG, WEBP, GIF, HEIC."}), 400
+
         import uuid
-        ext = os.path.splitext(filename)[1]
+        filename = secure_filename(file.filename)
+        ext = os.path.splitext(filename)[1].lower()
         unique_filename = f"{uuid.uuid4().hex}{ext}"
         
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        file_path = safe_resolve_upload_path(unique_filename)
+        if not file_path:
+            return jsonify({"error": "Invalid target upload path."}), 400
+
         file.save(file_path)
 
         db_path = f"/static/uploads/{unique_filename}"
@@ -249,11 +318,13 @@ def upload_general_file():
         }), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"UPLOAD GENERAL FILE ERROR: {e}")
+        return jsonify({"error": "Failed to upload file."}), 500
     
 
 @app.route('/api/carousel', methods=['GET'])
 def get_carousel_images():
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor() 
@@ -264,17 +335,19 @@ def get_carousel_images():
         images = [dict(zip(row_headers, row)) for row in cursor.fetchall()]
         
         cursor.close()
-        conn.close()
-        
         return jsonify(images), 200
         
     except Exception as e:
         print(f"GET CAROUSEL ERROR: {e}") 
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Failed to retrieve carousel images."}), 500
+    finally:
+        if conn:
+            conn.close()
     
 @app.route('/api/carousel/<int:image_id>', methods=['DELETE'])
 @token_required
 def delete_carousel_image(image_id):
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -286,26 +359,30 @@ def delete_carousel_image(image_id):
         if row:
             image_url = row[0] # e.g., "/static/uploads/Cat.jpeg"
             
-            # --- LOCAL FILE DELETION ---
-            # Remove the leading slash to make it a valid path for os.remove
-            file_path_to_delete = os.path.join(os.getcwd(), image_url.lstrip('/'))
-            
-            if os.path.exists(file_path_to_delete):
-                os.remove(file_path_to_delete)
+            # --- SAFE LOCAL FILE DELETION ---
+            file_path_to_delete = safe_resolve_upload_path(image_url)
+            if file_path_to_delete and os.path.isfile(file_path_to_delete):
+                try:
+                    os.remove(file_path_to_delete)
+                except Exception as del_err:
+                    print(f"Error removing physical file: {del_err}")
         
         # 2. Delete the record from the database
         cursor.execute("DELETE FROM featured_carousel WHERE id = %s", (image_id,))
-        
         conn.commit()
         cursor.close()
-        conn.close()
         
         return jsonify({"message": "Image deleted successfully!"}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"DELETE CAROUSEL ERROR: {e}")
+        return jsonify({"error": "Failed to delete carousel image."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @app.route('/api/config/featured', methods=['GET'])
 def get_featured_config():
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -316,63 +393,80 @@ def get_featured_config():
         config_dict = {row[0]: row[1] for row in rows}
         
         cursor.close()
-        conn.close()
         return jsonify(config_dict), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"GET FEATURED CONFIG ERROR: {e}")
+        return jsonify({"error": "Failed to get site configuration."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @app.route('/api/gallery/memories', methods=['DELETE'])
 @token_required 
 def delete_memory():
-    data = request.get_json()
-    image_url_to_delete = data.get('image_url')
-    
-    if not image_url_to_delete:
-        return jsonify({"error": "No image URL provided"}), 400
-
-    # --- LOCAL FILE DELETION ---
+    conn = None
     try:
-        # e.g., if URL is "/static/uploads/image.jpg", remove leading slash
-        file_path_to_delete = os.path.join(os.getcwd(), image_url_to_delete.lstrip('/'))
+        data = request.get_json(silent=True) or {}
+        image_url_to_delete = data.get('image_url')
         
-        if os.path.exists(file_path_to_delete):
-            os.remove(file_path_to_delete)
+        if not image_url_to_delete:
+            return jsonify({"error": "No image URL provided"}), 400
+
+        # --- SAFE LOCAL FILE DELETION WITH PATH BOUNDARY VERIFICATION ---
+        file_path_to_delete = safe_resolve_upload_path(image_url_to_delete)
+        if file_path_to_delete and os.path.isfile(file_path_to_delete):
+            try:
+                os.remove(file_path_to_delete)
+            except Exception as e:
+                print(f"Error deleting physical file: {e}")
+
+        # Delete from Database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+            
+        cursor.execute("DELETE FROM gallery WHERE image_url = %s", (image_url_to_delete,))
+        conn.commit()
+        cursor.close()
+
+        return jsonify({"message": "Photo deleted successfully"}), 200
     except Exception as e:
-        print(f"Error deleting physical file: {e}")
-
-    # Delete from Database
-    conn = get_db_connection()
-    cursor = conn.cursor()
-        
-    cursor.execute("DELETE FROM gallery WHERE image_url = %s", (image_url_to_delete,))
-        
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    return jsonify({"message": "Photo deleted successfully"}), 200
+        print(f"DELETE MEMORY ERROR: {e}")
+        return jsonify({"error": "Failed to delete memory."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route('/api/gallery/memories/replace', methods=['POST'])
 @token_required 
 def replace_memory():
-    if 'new_image' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-        
-    file = request.files['new_image']
-    old_image_url = request.form.get('old_image_url')
+    conn = None
+    try:
+        if 'new_image' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+            
+        file = request.files['new_image']
+        old_image_url = request.form.get('old_image_url')
 
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
 
-    if file:
-        # --- LOCAL FILE UPLOAD & DELETE ---
-        # 1. Save the new file locally
+        if not allowed_file(file.filename):
+            return jsonify({"error": "Invalid file type. Allowed formats: PNG, JPG, JPEG, WEBP, GIF, HEIC."}), 400
+
+        # --- LOCAL FILE UPLOAD & SAFE DELETE ---
+        import uuid
         filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        ext = os.path.splitext(filename)[1].lower()
+        unique_filename = f"{uuid.uuid4().hex}{ext}"
+
+        file_path = safe_resolve_upload_path(unique_filename)
+        if not file_path:
+            return jsonify({"error": "Invalid target upload path."}), 400
+
         file.save(file_path)
 
-        new_image_url = f"/static/uploads/{filename}"
+        new_image_url = f"/static/uploads/{unique_filename}"
 
         # 2. Update Database with the new local path
         conn = get_db_connection()
@@ -382,40 +476,48 @@ def replace_memory():
             "UPDATE gallery SET image_url = %s WHERE image_url = %s", 
             (new_image_url, old_image_url)
         )
-        
         conn.commit()
         cursor.close()
-        conn.close()
 
-        # 3. Delete the old physical file to save space
+        # 3. Delete the old physical file safely
         try:
             if old_image_url:
-                old_file_path = os.path.join(os.getcwd(), old_image_url.lstrip('/'))
-                if os.path.exists(old_file_path):
+                old_file_path = safe_resolve_upload_path(old_image_url)
+                if old_file_path and os.path.isfile(old_file_path):
                     os.remove(old_file_path)
         except Exception as e:
             print(f"Error deleting old physical file: {e}")
 
         return jsonify({"message": "Photo replaced", "new_image_url": new_image_url}), 200
+    except Exception as e:
+        print(f"REPLACE MEMORY ERROR: {e}")
+        return jsonify({"error": "Failed to replace photo."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @app.route('/api/config/featured', methods=['PUT'])
 @token_required 
 def update_featured_config():
+    conn = None
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("UPDATE site_config SET config_value = %s WHERE config_key = 'featured_title'", (data['title'],))
-        cursor.execute("UPDATE site_config SET config_value = %s WHERE config_key = 'featured_desc'", (data['description'],))
+        cursor.execute("UPDATE site_config SET config_value = %s WHERE config_key = 'featured_title'", (data.get('title', ''),))
+        cursor.execute("UPDATE site_config SET config_value = %s WHERE config_key = 'featured_desc'", (data.get('description', ''),))
         
         conn.commit()
         cursor.close()
-        conn.close()
         return jsonify({"message": "Successfully updated!"}), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"UPDATE FEATURED CONFIG ERROR: {e}")
+        return jsonify({"error": "Failed to update configuration."}), 500
+    finally:
+        if conn:
+            conn.close()
 
 if __name__ == "__main__":
     # Local development settings with auto-reload enabled

@@ -1,10 +1,20 @@
 FROM python:3.12-slim
 
+# Create a non-privileged user to run the container
+RUN groupadd -r appgroup && useradd -r -g appgroup -d /app -s /sbin/nologin appuser
+
 WORKDIR /app
 
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/ .
+COPY --chown=appuser:appgroup backend/ .
 
-CMD exec gunicorn --bind :$PORT app:app
+# Ensure static upload directory exists and is owned by appuser
+RUN mkdir -p /app/static/uploads && chown -R appuser:appgroup /app
+
+USER appuser
+
+EXPOSE 8080
+
+CMD exec gunicorn --bind :$PORT --workers 2 --threads 4 --timeout 60 app:app

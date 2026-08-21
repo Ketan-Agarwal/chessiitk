@@ -16,6 +16,7 @@ CREATE TABLE users (
     chess_username varchar(100) NOT NULL,
     password_hash varchar(255) NOT NULL,
     created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    token_version integer NOT NULL DEFAULT 0,
     is_admin boolean DEFAULT FALSE,
     name varchar(255) NOT NULL DEFAULT 'Grandmaster Apprentice',
     roll_no varchar(50) NOT NULL DEFAULT 'XXXXXX',
@@ -28,6 +29,7 @@ CREATE TABLE users (
 CREATE TABLE pending_otps (
     email varchar(255) PRIMARY KEY,
     otp varchar(6) NOT NULL,
+    attempts integer NOT NULL DEFAULT 0,
     created_at timestamp DEFAULT CURRENT_TIMESTAMP
 );
 
