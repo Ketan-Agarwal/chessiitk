@@ -622,10 +622,20 @@ const Events = () => {
                       );
                     }
 
-                    if (event.register_link) {
+                    let registrationUrl = null;
+                    try {
+                      const parsedUrl = new URL(event.register_link);
+                      if (['http:', 'https:'].includes(parsedUrl.protocol)) {
+                        registrationUrl = parsedUrl.href;
+                      }
+                    } catch {
+                      // Invalid or legacy unsafe links are not rendered as clickable actions.
+                    }
+
+                    if (registrationUrl) {
                       return (
                         <a 
-                          href={event.register_link} 
+                          href={registrationUrl} 
                           target="_blank" 
                           rel="noopener noreferrer"
                           className="block w-full text-center bg-primary text-[#3c2f00] py-3 rounded-xl font-bold hover:bg-[#d4af37] transition-colors text-xs font-label uppercase tracking-widest shadow-md shadow-primary/10"

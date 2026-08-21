@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { useAuth } from '../context/AuthContext'; 
 import { globalCache } from '../utils/cache';
+import DOMPurify from 'dompurify';
 import tournamentImg from '../assets/fide.png';
 import fresherImg from '../assets/fcl.png';
 import winnerImg from '../assets/anuj_shivratri.png';
@@ -48,7 +49,7 @@ const formatInjectedContent = (rawContent) => {
   }
 
   // Regex to match raw base64 images without data prefix
-  return content.replace(
+  const formattedContent = content.replace(
     /<img([^>]+)src=["'](?!\s*data:)([^"']+)["']/g,
     (match, attributes, src) => {
       if (src.startsWith('/9j/') || src.startsWith('iVBORw0KGgo')) {
@@ -57,6 +58,12 @@ const formatInjectedContent = (rawContent) => {
       return match;
     }
   );
+
+  return DOMPurify.sanitize(formattedContent, {
+    ALLOWED_TAGS: ['p', 'br', 'div', 'span', 'strong', 'em', 'b', 'i', 'u', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'img'],
+    ALLOWED_ATTR: ['class', 'href', 'src', 'alt', 'title', 'target', 'rel'],
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|\/|data:image\/(?:png|jpe?g|gif|webp);base64,)/i,
+  });
 };
 
 const LEGACY_POSTS_MAP = {};
@@ -210,7 +217,10 @@ const BlogPost = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/blogs/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({
           author_email: effectiveEmail,
           title: editTitle,
