@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS events CASCADE;
 DROP TABLE IF EXISTS featured_carousel CASCADE;
 DROP TABLE IF EXISTS gallery CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS security_rate_limits CASCADE;
 
 -- 1. Users Table
 CREATE TABLE users (
@@ -32,6 +33,14 @@ CREATE TABLE pending_otps (
     attempts integer NOT NULL DEFAULT 0,
     created_at timestamp DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE security_rate_limits (
+    rate_key text PRIMARY KEY,
+    window_started_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0)
+);
+
+CREATE INDEX security_rate_limits_window_idx ON security_rate_limits (window_started_at);
 
 -- 3. Site Config Table
 CREATE TABLE site_config (
@@ -107,3 +116,4 @@ ALTER TABLE featured_carousel ENABLE ROW LEVEL SECURITY;
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gallery ENABLE ROW LEVEL SECURITY;
 ALTER TABLE blogs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_rate_limits ENABLE ROW LEVEL SECURITY;

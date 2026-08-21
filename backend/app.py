@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 from config.db import get_db_connection
+from security_controls import consume_rate_limit, verify_recaptcha
 from werkzeug.utils import secure_filename
 import bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
@@ -135,6 +136,21 @@ def login():
         
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        limit = int(os.environ.get("LOGIN_RATE_LIMIT_ATTEMPTS", "10"))
+        window = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "900"))
+        client_address = request.remote_addr or "unknown"
+        ip_allowed = consume_rate_limit(cursor, "login-ip", client_address, limit, window)
+        account_allowed = consume_rate_limit(cursor, "login-account", username, limit, window)
+        if not ip_allowed or not account_allowed:
+            cursor.close()
+            return jsonify({'error': 'Too many login attempts. Please try again later.'}), 429
+
+        captcha_ok, captcha_error = verify_recaptcha(data.get('recaptcha_token'), 'login')
+        if not captcha_ok:
+            cursor.close()
+            status = 503 if captcha_error in {'configuration', 'unavailable'} else 400
+            return jsonify({'error': 'Unable to verify that you are human. Please try again.'}), status
         
         cursor.execute(
             "SELECT id, is_admin, password_hash, email, token_version FROM users WHERE LOWER(email) = LOWER(%s) OR LOWER(secondary_email) = LOWER(%s)", 

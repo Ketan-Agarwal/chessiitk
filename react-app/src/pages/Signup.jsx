@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
+import { getRecaptchaToken } from '../utils/recaptcha';
 
 const Signup = () => {
   const [mode, setMode] = useState('student'); // 'student' or 'alumni'
@@ -81,13 +82,15 @@ const Signup = () => {
     }
 
     try {
+      const recaptchaToken = await getRecaptchaToken('signup');
       const response = await fetch(`${API_BASE_URL}/api/send-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: email.trim(),
           secondary_email: secondaryEmail.trim(),
-          chess_username: chessUsername.trim()
+          chess_username: chessUsername.trim(),
+          recaptcha_token: recaptchaToken
         }),
       });
 
@@ -101,7 +104,7 @@ const Signup = () => {
       }
     } catch (err) {
       console.error("OTP Error:", err);
-      setError('Cannot connect to the server. Is your Python backend running?');
+      setError(err.message || 'Cannot connect to the server. Is your Python backend running?');
     } finally {
       setIsLoading(false);
     }
@@ -172,6 +175,7 @@ const Signup = () => {
     }
 
     try {
+      const recaptchaToken = await getRecaptchaToken('alumni_request');
       const response = await fetch(`${API_BASE_URL}/api/alumni-request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,7 +187,8 @@ const Signup = () => {
           chess_username: chessUsername.trim(),
           contact: contact.trim(),
           notes: alumniNotes.trim(),
-          gender: gender
+          gender: gender,
+          recaptcha_token: recaptchaToken
         }),
       });
 
@@ -197,7 +202,7 @@ const Signup = () => {
       }
     } catch (err) {
       console.error("Alumni Request Error:", err);
-      setError('Cannot connect to the server. Please try again.');
+      setError(err.message || 'Cannot connect to the server. Please try again.');
     } finally {
       setIsLoading(false);
     }

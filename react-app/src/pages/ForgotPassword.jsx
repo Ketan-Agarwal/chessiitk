@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
+import { getRecaptchaToken } from '../utils/recaptcha';
 
 const ForgotPassword = () => {
   const [step, setStep] = useState(1);
@@ -22,10 +23,11 @@ const ForgotPassword = () => {
     setIsLoading(true);
 
     try {
+      const recaptchaToken = await getRecaptchaToken('forgot_password');
       const response = await fetch(`${API_BASE_URL}/api/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, recaptcha_token: recaptchaToken }),
       });
 
       const data = await response.json();
@@ -37,7 +39,7 @@ const ForgotPassword = () => {
         setStep(2);
       }
     } catch (err) {
-      setError('Cannot connect to the server.');
+      setError(err.message || 'Cannot connect to the server.');
     } finally {
       setIsLoading(false);
     }

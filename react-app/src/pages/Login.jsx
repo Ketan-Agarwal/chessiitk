@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE_URL } from '../config';
+import { getRecaptchaToken } from '../utils/recaptcha';
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(''); // Added to show incorrect password messages
+  const [isLoading, setIsLoading] = useState(false);
   
   const { login, isLoggedIn } = useAuth();
   const navigate = useNavigate();
@@ -21,8 +23,10 @@ const Login = () => {
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setIsLoading(true);
 
     try {
+      const recaptchaToken = await getRecaptchaToken('login');
       // Talk to your local Python backend
       const response = await fetch(`${API_BASE_URL}/api/login`, {
         method: 'POST',
@@ -32,7 +36,8 @@ const Login = () => {
         body: JSON.stringify({ 
           email : email,
           username: email, // Python is looking for 'username', so we pass the email state here
-          password: password 
+          password: password,
+          recaptcha_token: recaptchaToken
         }),
       });
 
@@ -58,7 +63,9 @@ const Login = () => {
       }
     } catch (err) {
       console.error("Login Error:", err);
-      setError('Cannot connect to the server. Is your Python backend running?');
+      setError(err.message || 'Cannot connect to the server. Is your Python backend running?');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -146,9 +153,10 @@ const Login = () => {
           <div className="pt-2">
             <button
               type="submit"
+              disabled={isLoading}
               className="group relative w-full flex justify-center py-3.5 px-4 border border-transparent text-sm font-bold rounded-xl text-on-primary bg-primary hover:bg-primary/90 hover:shadow-[0_0_20px_rgba(242,202,80,0.3)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary focus:ring-offset-surface transition-all duration-300"
             >
-              Sign In
+              {isLoading ? 'Verifying...' : 'Sign In'}
             </button>
             <p className="text-center text-sm text-on-surface-variant mt-4">
               Don't have an account?{' '}

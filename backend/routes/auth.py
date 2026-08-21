@@ -9,8 +9,8 @@ import psycopg
 from psycopg.rows import dict_row
 import requests
 from config.db import get_db_connection
-from google.cloud import storage
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from security_controls import consume_rate_limit, verify_recaptcha
 
 # 1. ALWAYS initialize the Blueprint first!
 auth_bp = Blueprint('auth', __name__)
@@ -29,12 +29,24 @@ def verify_otp(cursor, email, provided_otp):
         (email,),
     )
     record = cursor.fetchone()
-    if not record or record[1] >= MAX_OTP_ATTEMPTS:
+    if not record:
         return False
-    if not secrets.compare_digest(str(record[0]), str(provided_otp)):
+    stored_otp = record.get('otp') if hasattr(record, 'get') else record[0]
+    attempts = record.get('attempts') if hasattr(record, 'get') else record[1]
+    if attempts >= MAX_OTP_ATTEMPTS:
+        return False
+    if not secrets.compare_digest(str(stored_otp), str(provided_otp)):
         cursor.execute("UPDATE pending_otps SET attempts = attempts + 1 WHERE email = %s", (email,))
         return False
     return True
+
+
+def recaptcha_error(data, action):
+    valid, reason = verify_recaptcha(data.get('recaptcha_token'), action)
+    if valid:
+        return None
+    status = 503 if reason in {'configuration', 'unavailable'} else 400
+    return jsonify({"error": "Unable to verify that you are human. Please try again."}), status
 
 def is_valid_password(password):
     return (
@@ -91,6 +103,10 @@ def generate_otp():
     if not chess_username or not CHESS_USERNAME_REGEX.match(chess_username):
         return jsonify({"error": "A valid Chess.com ID is required (alphanumeric, hyphens and underscores only)."}), 400
 
+    captcha_failure = recaptcha_error(data, 'signup')
+    if captcha_failure:
+        return captcha_failure
+
     # 1. Validate Chess.com Username existence BEFORE sending OTP
     headers = {"User-Agent": "ChessClubIITK-Signup-App/1.0 (Contact: chessclub@iitk.ac.in)"}
     chess_api_url = f"https://api.chess.com/pub/player/{chess_username.lower()}"
@@ -111,6 +127,12 @@ def generate_otp():
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
+            client_address = request.remote_addr or "unknown"
+            recipient_allowed = consume_rate_limit(cursor, "signup-secondary", secondary_email, 3, 3600)
+            ip_allowed = consume_rate_limit(cursor, "signup-ip", client_address, 10, 3600)
+            if not recipient_allowed or not ip_allowed:
+                return jsonify({"error": "Too many verification requests. Please try again later."}), 429
+
             cursor.execute(
                 "SELECT 1 FROM pending_otps WHERE email = %s AND created_at >= NOW() - INTERVAL '60 seconds'",
                 (primary_email,)
@@ -263,10 +285,20 @@ def forgot_password():
     if not email or not EMAIL_REGEX.match(email):
         return jsonify({"error": "A valid email address is required."}), 400
 
+    captcha_failure = recaptcha_error(data, 'forgot_password')
+    if captcha_failure:
+        return captcha_failure
+
     connection = None
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
+            client_address = request.remote_addr or "unknown"
+            recipient_allowed = consume_rate_limit(cursor, "password-reset-recipient", email, 5, 3600)
+            ip_allowed = consume_rate_limit(cursor, "password-reset-ip", client_address, 10, 3600)
+            if not recipient_allowed or not ip_allowed:
+                return jsonify({"message": "If an account exists, a recovery code has been sent."}), 200
+
             # 1. Check if the user exists
             cursor.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(%s) OR LOWER(secondary_email) = LOWER(%s)", (email, email))
             account_exists = cursor.fetchone() is not None
@@ -673,6 +705,23 @@ def handle_alumni_request():
 
     if email.lower().endswith('@iitk.ac.in') and not IITK_EMAIL_REGEX.match(email):
         return jsonify({"error": "IITK email must contain your 2-digit year identifier before @iitk.ac.in (e.g. username25@iitk.ac.in)."}), 400
+
+    captcha_failure = recaptcha_error(data, 'alumni_request')
+    if captcha_failure:
+        return captcha_failure
+
+    rate_connection = None
+    try:
+        rate_connection = get_db_connection()
+        with rate_connection.cursor() as cursor:
+            client_address = request.remote_addr or "unknown"
+            email_allowed = consume_rate_limit(cursor, "alumni-request-email", email, 3, 86400)
+            ip_allowed = consume_rate_limit(cursor, "alumni-request-ip", client_address, 5, 3600)
+            if not email_allowed or not ip_allowed:
+                return jsonify({"error": "Too many requests. Please try again later."}), 429
+    finally:
+        if rate_connection:
+            rate_connection.close()
 
     # Validate Chess.com ID if provided
     if chess_username:

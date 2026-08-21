@@ -3,9 +3,9 @@
 
 # Setting up the backend deployment
 
-1) Go to your vercel deployment project, then Environment variables on the left side pane. Add an Environment Variable, name it as "VITE_API_URL" without the quotation marks and ask Divyesh for it's value.
+1) Go to your Vercel deployment project, then Environment variables. Add `VITE_API_URL` and `VITE_RECAPTCHA_SITE_KEY`. The latter must be the site key for a Google reCAPTCHA v3 property that includes the production and preview hostnames.
 2) In the repository, go to backend->app.py. Under CORS, replace the url in the origins with the url of your host domain. Only this URL will be allowed to access the service. PS: if you go to inspect -> console on the website, you'll see a error message with CORS on it if it's setup incorrectly. Make sure there are no trailing backslashes. In future, maybe this can also be turned into an environment variable.
-3) In Google Run, I have added several environment variables, mostly those in the .env file in the local repo. Change this only if required.
+3) In Cloud Run, configure `RECAPTCHA_SECRET_KEY`, `RECAPTCHA_ALLOWED_HOSTNAMES` (comma-separated), and optionally `RECAPTCHA_MIN_SCORE` (defaults to `0.5`). The secret key must never be exposed through a `VITE_` variable. Apply `backend/migrations/002_public_flow_abuse_controls.sql` before deploying this version.
 
 **Note 1: The service on Google run is linked with my repository. Hence any changes to the backend should be notified to me. Only when I sync this fork will the backend get updated**
 
